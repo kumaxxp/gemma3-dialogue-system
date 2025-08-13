@@ -9,7 +9,9 @@ import ollama
 from rich.console import Console
 from colorama import init
 
-from dialogue_system import DialogueSystem, check_ollama, save_dialogue
+# リファクタリング後のインポート
+from dialogue_system import DialogueSystem
+from utils import check_ollama, save_dialogue
 
 init(autoreset=True)
 console = Console()
