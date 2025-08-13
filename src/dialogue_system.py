@@ -116,21 +116,44 @@ class DialogueSystem:
         """語り手の応答"""
         templates = self.config["prompts"]["narrator_templates"]
         
+        # 初回ターン
         if self.turn == 0:
             prompt = templates["start"].format(theme=self.theme)
-        elif "ない" in critic_text or "おかしい" in critic_text:
-            prompt = templates["contradiction_response"].format(critic_text=critic_text)
+        
+        # アクションベースの選択
         elif action == "breakthrough":
             prompt = templates["breakthrough"]
         elif action == "develop":
             prompt = templates["develop"]
         elif action == "climax":
             prompt = templates["climax"]
+        
+        # 批評の内容に基づく選択（批評テキストは直接含めない）
+        elif critic_text:
+            if "？" in critic_text:
+                # 質問への対応
+                prompt = templates["with_question"]
+            elif "ない" in critic_text or "おかしい" in critic_text or "ありえない" in critic_text:
+                # 矛盾指摘への対応
+                prompt = templates["with_contradiction"]
+            else:
+                # 通常の継続
+                prompt = templates["continue"]
         else:
-            prompt = templates["continue"].format(critic_text=critic_text)
+            # 批評なしの継続
+            prompt = templates["continue"]
+        
+        # システムプロンプトも強化
+        system_prompt = f"""あなたは「{self.theme}」の物語を語る語り手です。
+重要なルール：
+- 批評や質問は物語外からのフィードバックです
+- 「という質問」「という指摘」などメタ的な言及は絶対禁止
+- 批評への応答は物語の中で自然に示す
+- 説明ではなく、描写で物語を進める
+- 簡潔に、具体的に、2文で"""
         
         messages = [
-            {"role": "system", "content": f"あなたは「{self.theme}」の物語を語る語り手です。簡潔に、具体的に。"},
+            {"role": "system", "content": system_prompt},
             {"role": "user", "content": prompt}
         ]
         
@@ -359,7 +382,7 @@ class PromptGenerator:
 
 ### ルール
 1. 返答は必ず15文字以内
-2. 最初は短い相槌（へー、ふーん、続けて）
+2. 最初は短い相槌（へー、ふーん、それで？）
 3. 矛盾を見つけたら具体的に指摘
 4. 質問は簡潔に（どこで？いつ？なぜ？）
 
@@ -371,8 +394,8 @@ class PromptGenerator:
 
 ### 指摘の例
 - 「{forbidden.split(',')[0] if forbidden else '矛盾'}はない」
-- 「それはおかしい。{forbidden}」
-- 「ありえない。{forbidden}」
+- 「それはおかしい」
+- 「ありえない」
 """
 
 
@@ -490,7 +513,12 @@ def clean_response(text: str, role: str) -> str:
             "理解しました",
             "ご指摘",
             "修正",
-            "確かに"
+            "確かに",
+            "という質問",
+            "という指摘",
+            "という疑問",
+            "に対する答え",
+            "に答える"
         ]
         for phrase in meta_phrases:
             text = text.replace(phrase, "")
