@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-リファクタリング版：対話システムのコアロジック
+改良版：批評反映機能を持つ対話システム
 """
 
 import json
@@ -139,41 +139,65 @@ class DialogueSystem:
         """
         templates = self.config["prompts"]["narrator_templates"]
         
+        # 対話履歴を構築（直近の数ターン）
+        recent_history = ""
+        for entry in self.dialogue[-6:]:  # 直近6エントリ（約3往復）
+            if entry["role"] == "narrator":
+                recent_history += f"語り手: {entry['content']}\n"
+            elif entry["role"] == "critic":
+                recent_history += f"批評: {entry['content']}\n"
+        
         # 初回ターン
         if self.turn == 0:
             prompt = templates["start"].format(theme=self.theme)
-        
-        # アクションベースの選択
-        elif action == "breakthrough":
-            prompt = templates["breakthrough"]
-        elif action == "develop":
-            prompt = templates["develop"]
-        elif action == "climax":
-            prompt = templates["climax"]
-        
-        # 批評の内容に基づく選択（批評テキストは直接含めない）
-        elif critic_text:
-            if "？" in critic_text:
-                # 質問への対応
-                prompt = templates["with_question"]
-            elif "ない" in critic_text or "おかしい" in critic_text or "ありえない" in critic_text:
-                # 矛盾指摘への対応
-                prompt = templates["with_contradiction"]
-            else:
-                # 通常の継続
-                prompt = templates["continue"]
         else:
-            # 批評なしの継続
-            prompt = templates["continue"]
+            # アクションに応じた基本プロンプト選択
+            if action == "breakthrough":
+                base_prompt = templates["breakthrough"]
+            elif action == "develop":
+                base_prompt = templates["develop"]
+            elif action == "climax":
+                base_prompt = templates["climax"]
+            elif critic_text and "？" in critic_text:
+                base_prompt = templates["with_question"]
+            elif critic_text and ("ない？" in critic_text or "じゃない？" in critic_text):
+                base_prompt = templates["with_contradiction"]
+            else:
+                base_prompt = templates.get("continue", "物語を自然に続けてください。")
+            
+            # 批評の内容を物語への指示として含める
+            if critic_text:
+                prompt = f"""
+### これまでの対話
+{recent_history}
+
+### 直前の批評
+批評: {critic_text}
+
+### 指示
+{base_prompt}
+
+批評の指摘や質問を物語の中で自然に解決してください。
+批評に言及せず、物語の描写として答えを示してください。
+2文で簡潔に。
+"""
+            else:
+                prompt = base_prompt
         
-        # システムプロンプトも強化
+        # システムプロンプト
         system_prompt = f"""あなたは「{self.theme}」の物語を語る語り手です。
-重要なルール：
-- 批評や質問は物語外からのフィードバックです
-- 「という質問」「という指摘」などメタ的な言及は絶対禁止
-- 批評への応答は物語の中で自然に示す
-- 説明ではなく、描写で物語を進める
-- 簡潔に、具体的に、2文で"""
+
+### 重要なルール
+1. 物語の描写のみを行う
+2. 批評への言及は絶対禁止（「という質問」「という指摘」など）
+3. 批評の内容は物語の展開で自然に解決する
+4. 具体的で視覚的な描写を心がける
+5. 2文以内で簡潔に表現する
+
+### 物語の一貫性
+- 設定した世界観を守る
+- 前の描写と矛盾しない
+- 批評で指摘された点は修正または説明する"""
         
         messages = [
             {"role": "system", "content": system_prompt},
@@ -206,26 +230,78 @@ class DialogueSystem:
         Returns:
             批評の応答テキスト
         """
-        action_prompts = self.config["prompts"]["critic_actions"]
+        # 批評用の改良されたプロンプト
+        forbidden_items = self.context.get('forbidden', [])
+        facts = self.context.get('facts', [])
         
-        if action == "analyze":
-            # forbiddenを含める特別な処理
-            prompt = f"""
-語り手: {narrator_text}
+        # アクションに応じたプロンプト
+        if action == "listen":
+            instruction = "相槌を打って。5文字以内。（例：へー、ふーん、それで？）"
+        elif action == "question":
+            instruction = "短い質問をして。10文字以内。（例：どこで？、なぜ？、いつ？）"
+        elif action == "analyze":
+            instruction = f"""
+矛盾や疑問があれば具体的に指摘。なければ短い感想。20文字以内。
 
-矛盾があれば指摘、なければ感想。15文字以内。禁止要素: {', '.join(self.context.get('forbidden', []))}
+### 禁止要素（これらは存在しないはず）
+{', '.join(forbidden_items)}
+
+### 指摘の例
+- 「{forbidden_items[0] if forbidden_items else '水'}ってありえなくない？」
+- 「それって矛盾してない？」
+- 「〜じゃないの？」
 """
+        elif action == "change_pattern":
+            instruction = "いつもと違う反応を。感嘆や驚き。15文字以内。"
+        elif action == "final_doubt":
+            instruction = "最後の疑問や感想。15文字以内。"
         else:
-            prompt = f"""
-語り手: {narrator_text}
+            instruction = "反応して。10文字以内。"
+        
+        # 対話履歴を含める
+        recent_history = ""
+        for entry in self.dialogue[-4:]:  # 直近4エントリ
+            if entry["role"] == "narrator":
+                recent_history += f"語り手: {entry['content']}\n"
+        
+        prompt = f"""
+### これまでの物語
+{recent_history}
 
-{action_prompts.get(action, '反応してください。10文字以内。')}
+### 最新の語り
+{narrator_text}
+
+### 指示
+{instruction}
 """
+        
+        # 改良された批評システムプロンプト
+        enhanced_critic_prompt = f"""あなたは{self.context.get('personality', '懐疑的')}な批評家です。
+
+### 基本ルール
+1. 必ず20文字以内で返答
+2. 断定的な否定（「ありえない！」）は避ける
+3. 疑問形で優しく指摘する（「〜じゃない？」「〜なの？」）
+4. 具体的な要素を挙げて質問する
+
+### この物語の重要な事実
+{chr(10).join(['・' + fact for fact in facts[:3]])}
+
+### 良い批評の例
+- 「水があるってありえなくない？」
+- 「それって前と違わない？」
+- 「場所はどこなの？」
+- 「おお、展開が面白い！」
+
+### 悪い批評の例
+- 「ありえない！」（断定的すぎる）
+- 「矛盾している」（具体性がない）
+- 「違う」（短すぎて不親切）"""
         
         response = ollama.chat(
             model=self.config["models"]["critic"]["model"],
             messages=[
-                {"role": "system", "content": self.critic_prompt},
+                {"role": "system", "content": enhanced_critic_prompt},
                 {"role": "user", "content": prompt}
             ],
             options=self.config["models"]["critic"]
@@ -233,14 +309,20 @@ class DialogueSystem:
         
         text = clean_response(response['message']['content'], "critic")
         
-        # 長さ制限
+        # 長さ制限（20文字）
         if len(text) > 20:
-            for delimiter in ['。', '？', '！', '、']:
-                if delimiter in text:
-                    text = text.split(delimiter)[0] + delimiter
-                    break
+            # 疑問符で終わるように調整
+            if "？" in text:
+                text = text.split("？")[0] + "？"
             else:
-                text = text[:20]
+                for delimiter in ['。', '！', '、']:
+                    if delimiter in text:
+                        text = text.split(delimiter)[0]
+                        if not text.endswith("？"):
+                            text += "？"
+                        break
+                else:
+                    text = text[:18] + "？"
         
         return text
     

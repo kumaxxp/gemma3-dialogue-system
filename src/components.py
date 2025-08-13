@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-対話システムのコンポーネント群
+対話システムのコンポーネント群（改良版）
 """
 
 import json
@@ -65,10 +65,11 @@ class PromptGenerator:
         """
         model_config = self.config["models"]["prompt_generator"]
         
-        # Gemma3用の構造化プロンプト
+        # Gemma3用の構造化プロンプト（改良版）
         prompt = f"""
 ### 指示
 テーマ「{theme}」の物語を批評するための設定を生成してください。
+批評は建設的で、具体的な指摘を行うものとします。
 
 ### 出力形式
 以下のJSON形式で出力してください。他の説明は不要です。
@@ -93,12 +94,22 @@ class PromptGenerator:
   ],
   "forbidden": [
     "この世界に存在しないもの1",
-    "この世界に存在しないもの2"
+    "この世界に存在しないもの2",
+    "この世界に存在しないもの3"
   ]
 }}
 
 ### テーマ
 {theme}
+
+### 例（火星の場合）
+{{
+  "facts": ["大気が薄い", "水がない", "重力が弱い"],
+  "contradictions": ["雨が降る", "植物が育つ"],
+  "personality": "科学的",
+  "focus": ["物理法則", "論理性"],
+  "forbidden": ["液体の水", "動植物", "酸素"]
+}}
 """
         
         try:
@@ -117,7 +128,7 @@ class PromptGenerator:
             response = ollama.chat(
                 model=model,
                 messages=[
-                    {"role": "system", "content": "あなたは物語の設定を分析する専門家です。"},
+                    {"role": "system", "content": "あなたは物語の設定を分析する専門家です。論理的で建設的な批評設定を作ります。"},
                     {"role": "user", "content": prompt}
                 ],
                 options={
@@ -164,13 +175,13 @@ class PromptGenerator:
                 "設定の無視",
                 "論理破綻"
             ],
-            "personality": "懐疑的",
+            "personality": "好奇心旺盛",
             "focus": ["一貫性", "論理性"],
-            "forbidden": ["矛盾", "非論理的展開"]
+            "forbidden": ["矛盾", "非論理的展開", "設定違反"]
         }
     
     def create_critic_prompt(self, context: Dict[str, Any]) -> str:
-        """批評AI用のシステムプロンプトを構築
+        """批評AI用のシステムプロンプトを構築（改良版）
         
         Args:
             context: 批評用のコンテキスト辞書
@@ -179,33 +190,46 @@ class PromptGenerator:
             批評AI用のシステムプロンプト
         """
         facts = "\n".join([f"・{fact}" for fact in context.get("facts", [])])
-        forbidden = ", ".join(context.get("forbidden", []))
+        forbidden = context.get("forbidden", [])
         
         return f"""
 ### 役割
-あなたは{context.get('personality', '懐疑的')}な批評家です。
+あなたは{context.get('personality', '好奇心旺盛')}な批評家です。
+物語を楽しみながら、論理的な観点から優しく質問や指摘をします。
 
-### ルール
-1. 返答は必ず15文字以内
-2. 最初は短い相槌（へー、ふーん、それで？）
-3. 矛盾を見つけたら具体的に指摘
-4. 質問は簡潔に（どこで？いつ？なぜ？）
+### 基本姿勢
+- 断定的な否定は避ける（「ありえない！」✗）
+- 疑問形で優しく尋ねる（「〜じゃない？」○）
+- 具体的な要素を挙げて質問する
+- 物語を楽しむ姿勢を忘れない
+
+### 返答のルール
+1. 必ず20文字以内
+2. 具体的な要素を含める
+3. 疑問形を活用する
+4. 建設的な指摘を心がける
 
 ### この物語の重要な事実
 {facts}
 
 ### 存在してはいけないもの
-{forbidden}
+{', '.join(forbidden)}
 
-### 指摘の例
-- 「{forbidden.split(',')[0] if forbidden else '矛盾'}はない」
-- 「それはおかしい」
-- 「ありえない」
+### 良い指摘の例
+- 「{forbidden[0] if forbidden else '水'}ってありえなくない？」
+- 「それって前と違わない？」
+- 「場所ってどこなの？」
+- 「面白い展開だね！」
+
+### 避けるべき指摘
+- 「ありえない！」（断定的すぎる）
+- 「おかしい」（具体性がない）
+- 「違う」（建設的でない）
 """
 
 
 class SmartDirector:
-    """進行管理
+    """進行管理（改良版）
     
     対話の流れを制御し、適切な指示を出す
     """
@@ -215,9 +239,10 @@ class SmartDirector:
         self.last_contradiction_turn = -1
         self.story_momentum = 0
         self.critic_patterns = []
+        self.question_count = 0
     
     def analyze_critic_response(self, text: str) -> str:
-        """批評のパターンを分析
+        """批評のパターンを分析（改良版）
         
         Args:
             text: 批評のテキスト
@@ -225,17 +250,21 @@ class SmartDirector:
         Returns:
             パターンの種類（contradiction/question/backchannel/comment）
         """
-        if "ない" in text or "おかしい" in text or "ありえない" in text:
+        # より柔軟なパターン認識
+        if "ない？" in text or "じゃない？" in text or "違わない？" in text:
             return "contradiction"
         elif "？" in text:
+            self.question_count += 1
             return "question"
         elif len(text) <= 5:
             return "backchannel"  # 相槌
+        elif "！" in text or "おお" in text or "すごい" in text:
+            return "exclamation"  # 感嘆
         else:
             return "comment"
     
     def get_instruction(self, turn: int, last_critic: str = "", last_narrator: str = "") -> Dict:
-        """状況に応じた適切な指示
+        """状況に応じた適切な指示（改良版）
         
         Args:
             turn: 現在のターン数
@@ -264,50 +293,66 @@ class SmartDirector:
                     "note": "パターンを変える"
                 }
         
-        # 矛盾が多すぎる場合
+        # 矛盾が多すぎる場合は突破口を
         if self.contradiction_count > 2 and turn - self.last_contradiction_turn < 2:
             return {
                 "to": "narrator",
                 "action": "breakthrough",
-                "note": "突破口を開く"
+                "note": "新展開で突破"
             }
         
-        # ターンに応じた基本戦略
-        if turn < 2:
+        # 質問が多い場合は詳細な説明を
+        if self.question_count > 2:
+            self.question_count = 0  # リセット
+            return {
+                "to": "narrator",
+                "action": "develop",
+                "note": "詳細に展開"
+            }
+        
+        # ターンに応じた基本戦略（改良版）
+        if turn == 0:
             return {
                 "to": "critic",
                 "action": "listen",
                 "note": "まず聞く"
             }
-        elif turn < 4:
+        elif turn < 3:
             return {
                 "to": "critic",
-                "action": "question",
-                "note": "質問する"
+                "action": "listen" if turn % 2 == 1 else "question",
+                "note": "興味を示す"
             }
-        elif turn < 6:
-            if turn % 2 == 0:
-                return {
-                    "to": "critic",
-                    "action": "analyze",
-                    "note": "分析する"
-                }
-            else:
+        elif turn < 5:
+            return {
+                "to": "critic",
+                "action": "question" if turn % 2 == 0 else "analyze",
+                "note": "掘り下げる"
+            }
+        elif turn < 7:
+            if self.story_momentum < 3:
                 return {
                     "to": "narrator",
                     "action": "develop",
-                    "note": "展開する"
+                    "note": "物語を深める"
+                }
+            else:
+                return {
+                    "to": "critic",
+                    "action": "analyze",
+                    "note": "詳細に分析"
                 }
         else:
-            if self.story_momentum < 2:
+            # 終盤
+            if turn == 7:
                 return {
                     "to": "narrator",
                     "action": "climax",
-                    "note": "クライマックスへ"
+                    "note": "クライマックス"
                 }
             else:
                 return {
                     "to": "critic",
                     "action": "final_doubt",
-                    "note": "最後の疑問"
+                    "note": "締めの感想"
                 }
